@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <stdbool.h>
 
 #define N 5
 #define LEFT (i+N-1)%N
@@ -15,6 +16,7 @@
 int state[N], i, int_rand;
 float float_rand;
 
+void estatistica(void);
 void mostrar(void);
 void pensar(int);
 void pegar_garfo(int);
@@ -25,9 +27,15 @@ void *acao_filosofo(void *);
 
 sem_t* mutex;
 sem_t* sem_fil[N];
+int tentouComer[N];
+int comeu[N];
+bool running;
+
 int main(){
 	for(int i=0;i<N;i++) {
 		state[i] = THINKING;
+        tentouComer[i] = 0;
+        comeu[i] = 0;
 	}
 	mostrar();
 
@@ -41,6 +49,7 @@ int main(){
 		sem_fil[i] = sem_open(name, O_CREAT, 0644, 0);
 	}
 
+    running = true;
 	for(i=0; i<N; i++){
 		res = pthread_create(&thread[i],NULL,acao_filosofo,&i);
 		if(res!=0){
@@ -49,6 +58,9 @@ int main(){
 		}
 	}
 
+    sleep(10);
+    running = false;
+
 	for(i=0; i<N; i++){
         res = pthread_join(thread[i],&thread_result);
         if(res!=0){
@@ -56,11 +68,17 @@ int main(){
             exit(EXIT_FAILURE);
         }
     }
+    estatistica();
     return 0;
 }
 
 void estatistica() {
-
+    printf("-----------------------------------------\n");
+    printf("   Estatistica do jantar dos filosofos   \n");
+    printf("-----------------------------------------\n");
+    for(int i=0;i<N;i++) {
+        printf("Filosofo %2d tentou comer %2d mas só comeu %2d refeicoes.\n", i, tentouComer[i], comeu[i]);
+    }
 }
 
 void mostrar(){
@@ -79,12 +97,13 @@ void mostrar(){
 }
 void *acao_filosofo(void *j){
     int i = *(int*) j;
-    while(1){
+    while(running){
         pensar(i);
         pegar_garfo(i);
         comer(i);
         por_garfo(i);
     }
+    return NULL;
 }
 void pensar(int i){
     float_rand=0.001*random();
@@ -100,7 +119,9 @@ void pegar_garfo(int i){
     sem_wait(sem_fil[i]);
 }
 void test(int i){
+    tentouComer[i]++;
     if(state[i] == HUNGRY && state[LEFT] != EATING && state[RIGHT] != EATING){
+        comeu[i]++;
         state[i]=EATING;
         mostrar();
         sem_post(sem_fil[i]);
