@@ -10,11 +10,14 @@ bool running;
 int idxVector;
 int vectorLen;
 int *vector;
+pthread_mutex_t vectorRead = PTHREAD_MUTEX_INITIALIZER;
 
 int idxLMedia;
 int idxRMedia;
 int somaMediaLen;
 int *somaMedia;
+pthread_mutex_t somaMediaRead = PTHREAD_MUTEX_INITIALIZER;
+
 int delta;
 
 
@@ -28,9 +31,11 @@ void sleep_ms(long milliseconds) {
 void* temperaturaFazenda(void *args) {
   idxVector = 0;
   while(running) {
+    pthread_mutex_lock(&vectorRead);
     const int temp = 1 + (rand()%1024);
-    vector[idxVector++] = temp;
-    idxVector %= vectorLen;
+    vector[idxVector] = temp;
+    idxVector = (idxVector+1)%vectorLen;
+    pthread_mutex_unlock(&vectorRead);
 #ifdef DEBUG
     printf("Adding %d\n", temp);
 #endif
@@ -44,19 +49,23 @@ void* temperaturaMedia(void *args) {
   const int tempo = *(int*)args;
   while(running) {
     const int totalQnt = tempo*1000 / delta;
-    int cur = idxVector-1;
     int med = 0;
     int curQnt = totalQnt;
+    pthread_mutex_lock(&vectorRead);
+    int cur = idxVector-1;
     while(curQnt-- > 0) {
       med += vector[(cur+vectorLen)%vectorLen];
       cur = (cur-1 + vectorLen)%vectorLen;
     }
+    pthread_mutex_unlock(&vectorRead);
 #ifdef DEBUG
     printf("Soma %d ->  %d\n", med, med/totalQnt);
 #endif
     med/=totalQnt;
-    somaMedia[idxRMedia++] = med;
-    idxRMedia%=somaMediaLen;
+    pthread_mutex_lock(&somaMediaRead);
+    somaMedia[idxRMedia] = med;
+    idxRMedia=(idxRMedia+1)%somaMediaLen;
+    pthread_mutex_unlock(&somaMediaRead);
     sleep_ms(tempo*1000);
   }
   return NULL;
@@ -76,11 +85,12 @@ void* verificacaoTemperaturaMedia(void *args) {
 #ifdef DEBUG
     printf("Verificando temperatura Media %d\n", somaMedia[idxLMedia]);
 #endif
+    pthread_mutex_lock(&somaMediaRead);
     if(somaMedia[idxLMedia] < limite) {
       printf("Erro de temperatura abaixo do limite:\n\tTemperatura:%d\n\tLimite:%d\nAtive a irrigação\n", somaMedia[idxLMedia], limite);
     }
-    idxLMedia++;
-    idxLMedia %= somaMediaLen;
+    idxLMedia = (idxLMedia+1)%somaMediaLen;
+    pthread_mutex_unlock(&somaMediaRead);
   }
   return NULL;
 }
