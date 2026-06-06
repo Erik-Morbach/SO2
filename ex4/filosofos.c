@@ -27,6 +27,7 @@ void *acao_filosofo(void *);
 
 sem_t* mutex;
 sem_t* sem_fil[N];
+int args[N];
 int tentouComer[N];
 int comeu[N];
 bool running;
@@ -51,7 +52,8 @@ int main(){
 
     running = true;
 	for(i=0; i<N; i++){
-		res = pthread_create(&thread[i],NULL,acao_filosofo,&i);
+        args[i] = i;
+		res = pthread_create(&thread[i],NULL,acao_filosofo,&args[i]);
 		if(res!=0){
 			perror("Erro na inicialização da thread!");
 			exit(EXIT_FAILURE);
