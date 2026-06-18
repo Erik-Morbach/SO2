@@ -136,9 +136,9 @@ void comer(int i){
 }
 void por_garfo(int i){
 	sem_wait(mutex);
-	state[i]=THINKING;
 	mostrar();
 	test(LEFT);
 	test(RIGHT);
+	state[i]=THINKING;
 	sem_post(mutex);
 }
