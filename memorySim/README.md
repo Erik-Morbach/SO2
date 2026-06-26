@@ -1,6 +1,6 @@
 # Memory Simulator
 
-Simulação de memória em C++17 com MMU, TLB (LRU), tabelas de página e uma classe `String` alocada via MMU.
+Simulador de alocador de memória para trabalho do Grau B da disciplina SO2;
 
 ## Arquitetura
 
@@ -13,7 +13,7 @@ Simulação de memória em C++17 com MMU, TLB (LRU), tabelas de página e uma cl
 | **MMU** | Gerencia a tradução de endereços virtuais para físicos. Possui um `MainMemory` compartilhado (via `shared_ptr`), uma `PageTable` por thread e uma `TLB` compartilhada entre threads. |
 | **PageTable** | Implementada como `unordered_set<PageEntry>`, indexada por `std::thread::id`. Mapeia endereço virtual → endereço físico de forma isolada por thread. |
 | **PageEntry** | Struct que armazena um par (vAddr, pAddr). Possui hash especializado para `unordered_set` (hash apenas por vAddr). |
-| **TLB** | Cache de tradução com tamanho fixo, política de evicção LRU via `FastSegTree` (min-heap baseado em timer). Compartilhada entre threads — o que pode causar *aliasing* (ver teste multi-thread). |
+| **TLB** | Cache de tradução com tamanho fixo, política de evicção LRU via `FastSegTree` (min-heap baseado em timer). Entradas chaveadas por `(thread_id, pageNumber)`. |
 | **MainMemory** | Array 2D `char[frame][offset]`. Bitset para controle de frames alocados. Alocação contígua first-fit. `allocSize[frame][0]` armazena o tamanho original para `free` dinâmico. |
 
 ### Segurança entre Threads
@@ -21,7 +21,7 @@ Simulação de memória em C++17 com MMU, TLB (LRU), tabelas de página e uma cl
 - **MMU**: `std::mutex` em todos os métodos públicos (`allocate`, `read`, `write`, `free`)
 - **MainMemory**: `std::mutex` em `allocate`, `writeInto`, `readInto`, `free`
 - **PageTable**: instância separada por thread via `std::unordered_map<std::thread::id, PageTable>` — sem necessidade de lock entre threads
-- **TLB**: compartilhada; sem lock dedicado (serializada pelo mutex do MMU)
+- **TLB**: entradas chaveadas por `(thread_id, pageNumber)` — threads diferentes não conflitam no cache
 
 ### Métricas da TLB
 
@@ -32,6 +32,17 @@ A TLB coleta três métricas automaticamente:
 | **Hits** | `exist()` retorna `true` | Tradução resolvida diretamente na TLB (rápido) |
 | **Misses** | `exist()` retorna `false` | Tradução não encontrada na TLB — busca na PageTable |
 | **Evictions** | `removeOldest()` | Entrada LRU removida para abrir espaço para uma nova |
+
+### Page Faults
+
+O contador de page faults é incrementado em **duas situações**:
+
+| Situação | Onde é incrementado | Causa |
+|----------|---------------------|-------|
+| **Capacidade** | `MainMemory::allocate()` | Memória física cheia — não há frames contíguos disponíveis |
+| **Página ausente** | `MMU::transform()` | Endereço virtual não possui entrada na tabela de páginas (acesso a região não mapeada) |
+
+Page faults de capacidade ocorrem quando `allocate` não encontra espaço. Page faults de página ausente ocorrem quando `read()` ou `write()` acessam um vAddr que nunca foi alocado ou já foi liberado.
 
 ## Configuração
 
@@ -90,7 +101,7 @@ Writing: |Testing| at 0,0
 Readed: |sting| from 0,2
 ```
 
-**Explicação:** Alocar 15 bytes consome 2 frames (first-fit contíguo). A leitura a partir do offset 2 retorna "sting" (pula "Te"), confirmando que `readInto`/`writeInto` funcionam com offset arbitrário dentro do frame.
+**Explicação:** Alocar 15 bytes consome 2 frames. A leitura a partir do offset 2 retorna "sting" (pula "Te").
 
 ---
 
@@ -110,7 +121,7 @@ Searching for 123: 18446744073709551615, 18446744073709551615
 Searching for 12: 12, 45
 ```
 
-**Explicação:** Entrada inexistente retorna `(-1, -1)` (max `size_t`). Após `createNew(12, 45)`, a busca retorna os valores corretos. O hash é apenas por vAddr, então duas entradas com mesmo vAddr mas pAddr diferentes colidiriam (comportamento esperado já que cada thread tem sua própria tabela).
+**Explicação:** Entrada inexistente retorna `(-1, -1)` (max `size_t`). Após `createNew(12, 45)`, a busca retorna os valores corretos. O hash é apenas por vAddr, ja que nunca teremos mais de uma alocação por endereço virtual para a mesma thread.
 
 ---
 
@@ -219,8 +230,8 @@ Searching for 12: 12, 45
   read after realloc: VWXYZ (expected VWXYZ)
 
 -- Page fault counter --
-  page faults: 0 (expected 0)
-  after unmapped read: 0 (expected 0 - no alloc attempt, no fault)
+  page faults: 1 (expected 1 - one from unmapped read at 0x2000)
+  after unmapped read: 2 (expected 2 - one more from unmapped read at 0x6000)
 
 -- printSummary --
 === MMU Summary ===
@@ -230,49 +241,41 @@ Searching for 12: 12, 45
 === TLB Summary (size=4) ===
   Entries: 4 / 4
   Hits: 6 | Misses: 2 | Evictions: 1
-    [0] vAddr=2048 pAddr=0
-    [1] vAddr=1228 pAddr=1
-    [2] vAddr=1229 pAddr=2
-    [3] vAddr=1230 pAddr=3
+    [0] thread=fe8082422f201a91 vAddr=2048 pAddr=0
+    [1] thread=fe8082422f201a91 vAddr=1228 pAddr=1
+    [2] thread=fe8082422f201a91 vAddr=1229 pAddr=2
+    [3] thread=fe8082422f201a91 vAddr=1230 pAddr=3
 === MainMemory Summary ===
   TOTAL_MEM: 1000 | FRAME_SIZE: 10 | QNT_FRAMES: 100
   Used frames: 4 / 100 (4.0%)
-  Page faults: 0
+  Page faults: 2
 ```
 
-**Explicação:** MMU completa o ciclo allocate→write→read com sucesso. Leitura de endereço não mapeado retorna -1 (sem page fault — não houve tentativa de alocação). Alocação de 25 bytes com frame de 10 ocupa 3 páginas (cross-page) — leitura/escrita funciona através de múltiplos frames. `free` dinâmico (sem parâmetro `size`) consulta `MainMemory::getAllocSize`. Page faults: 0. TLB: 6 hits, 2 misses, 1 evicção.
+**Explicação:** MMU completa o ciclo allocate→write→read com sucesso. Leitura de endereço não mapeado retorna -1 **e também incrementa o contador de page faults** (a página não está presente na tabela de páginas). Alocação de 25 bytes com frame de 10 ocupa 3 páginas (cross-page) — leitura/escrita funciona através de múltiplos frames. `free` dinâmico (sem parâmetro `size`) consulta `MainMemory::getAllocSize`. Page faults: 2 (ambos de leituras de endereços não mapeados: 0x2000 e 0x6000). TLB: 6 hits, 2 misses, 1 evicção.
 
 ---
 
-### 6. MMU Multi-thread — Mesmo vAddr, Tabelas Isoladas
+### 6. MMU Multi-thread — Mesmo vAddr, Tabelas e TLB Isoladas
 
-**Cenário:** Duas threads alocam o mesmo endereço virtual `0x1000`, escrevem dados diferentes e leem. Cada thread tem sua própria PageTable, mas a TLB é compartilhada.
+**Cenário:** Duas threads alocam o mesmo endereço virtual `0x1000`, escrevem dados diferentes e leem. Cada thread tem sua própria PageTable **e entradas isoladas na TLB** (chave composta `{thread_id, pageNumber}`).
 
 ```
 === Testing MMU Multi-thread (same vAddr, per-thread pt) ===
-  Thread1: read back "Thread2!" from vAddr=0x1000
+  Thread1: read back "Thread1!" from vAddr=0x1000
   Thread2: read back "Thread2!" from vAddr=0x1000
 === MMU Summary ===
   TOTAL_MEM=10000 FRAME_SIZE=10 TOTAL_VMEM=10000 TLB_ENTRIES=4
   Active page tables: 2
-    thread=3bb0a74982aebcf
-    thread=297d529ddeae593b
+    thread=6b377aa35fc0046e
+    thread=cd1f9a11fd9d1e05
 === TLB Summary (size=4) ===
-  Entries: 3 / 4
-  Hits: 3 | Misses: 1 | Evictions: 0
-    [0] vAddr=409 pAddr=0
-    [1] vAddr=409 pAddr=1
-    [2] vAddr=409 pAddr=1
-=== MainMemory Summary ===
-  TOTAL_MEM=10000 | FRAME_SIZE: 10 | QNT_FRAMES: 1000
-  Used frames: 0 / 1000 (0.0%)
-  Page faults: 0
+  Entries: 2 / 4
+  Hits: 4 | Misses: 0 | Evictions: 0
+    [0] thread=cd1f9a11fd9d1e05 vAddr=409 pAddr=0
+    [1] thread=6b377aa35fc0046e vAddr=409 pAddr=1
 ```
 
-**Observação importante — Aliasing de TLB:**
-As tabelas de página por thread garantem isolamento — cada thread mapeia `0x1000` para um frame físico diferente (pAddr=0 e pAddr=1). Porém, a TLB é **compartilhada** entre threads. Quando a Thread2 adiciona sua entrada `(409 → pAddr=1)` na TLB, ela sobrescreve o mapeamento anterior da Thread1 `(409 → pAddr=0)` no `pageToIndex`. Quando a Thread1 lê, encontra o mapeamento da Thread2 na TLB e lê do frame físico errado. O resultado: ambas as threads leem "Thread2!".
-
-Isso demonstra um **problema real de aliasing de TLB** em projetos com TLB compartilhada entre threads. Em hardware real, a TLB é tipicamente por núcleo ou por thread (CR3/ASID), evitando esse problema.
+**Explicação:** Cada entrada da TLB é chaveada por `(thread_id, pageNumber)`. As duas threads usam o mesmo pageNumber=409 (`0x1000 / 10`), mas como os thread_ids são dies, a TLB as trata como entradas distintas. Thread1 lê "Thread1!" do 1, Thread2 lê "Thread2!" do frame 0. A TLB Summary exibe o hash do thread_id de cada entrada.
 
 ---
 
@@ -328,24 +331,30 @@ Isso demonstra um **problema real de aliasing de TLB** em projetos com TLB compa
   TOTAL_MEM=64 KB (8 frames de 8 KB) | TOTAL_VMEM=1024 KB (128 paginas)
 
 
-  Thread1: 884543 allocs, 27839337 page faults, 0 data errors
-  Thread2: 884584 allocs, 31461784 page faults, 0 data errors
-  Total: 1769127 allocs | 59301121 page faults | 0 errors
+  Thread1: 820581 allocs, 25903643 page faults, 0 data errors
+  Thread2: 747049 allocs, 24899095 page faults, 0 data errors
+  Total: 1567630 allocs | 50802738 page faults | 0 errors
 
 === MMU Summary ===
   TOTAL_MEM=65536 FRAME_SIZE=8192 TOTAL_VMEM=1048576 TLB_ENTRIES=8
   Active page tables: 2
-    thread=...
-    thread=...
+    thread=6b377aa35fc0046e
+    thread=cd1f9a11fd9d1e05
 === TLB Summary (size=8) ===
   Entries: 8 / 8
-  Hits: 2617629 | Misses: 920617 | Evictions: 2689736
-    [0] vAddr=... pAddr=...
-    ...
+  Hits: 2468951 | Misses: 666302 | Evictions: 2233924
+    [0] thread=cd1f9a11fd9d1e05 vAddr=134 pAddr=6
+    [1] thread=cd1f9a11fd9d1e05 vAddr=133 pAddr=5
+    [2] thread=cd1f9a11fd9d1e05 vAddr=131 pAddr=3
+    [3] thread=cd1f9a11fd9d1e05 vAddr=129 pAddr=1
+    [4] thread=cd1f9a11fd9d1e05 vAddr=132 pAddr=4
+    [5] thread=6b377aa35fc0046e vAddr=319 pAddr=0
+    [6] thread=cd1f9a11fd9d1e05 vAddr=135 pAddr=7
+    [7] thread=cd1f9a11fd9d1e05 vAddr=128 pAddr=0
 === MainMemory Summary ===
   TOTAL_MEM: 65536 | FRAME_SIZE: 8192 | QNT_FRAMES: 8
-  Used frames: 8 / 8 (100.0%)
-  Page faults: 59301121
+  Used frames: 7 / 8 (87.5%)
+  Page faults: 50802738
 
   Result: PASS (data intact)
 ```
@@ -354,35 +363,35 @@ Isso demonstra um **problema real de aliasing de TLB** em projetos com TLB compa
 
 | Métrica | Valor | Interpretação |
 |---------|-------|---------------|
-| **Alocações bem-sucedidas** | 1.769.127 | Cada alocação consumiu 1 frame de 8 KB |
-| **Page faults** | **59.301.121** | Memória física completamente exaurida — `MainMemory::allocate` não encontrou frames contíguos |
+| **Alocações bem-sucedidas** | 1.567.630 | Cada alocação consumiu 1 frame de 8 KB |
+| **Page faults** | **50.802.738** | Memória física completamente exaurida — `MainMemory::allocate` não encontrou frames contíguos |
 | **Data errors** | **0** | Nenhuma corrupção — toda leitura retornou o padrão esperado |
-| **TLB Hits** | 2.617.629 | Traduções resolvidas na TLB |
-| **TLB Misses** | 920.617 | Traduções que precisaram consultar a PageTable |
-| **TLB Evicções** | **2.689.736** | LRU removendo entradas para abrir espaço — com 8 entradas e dezenas de vAddrs, a TLB vive cheia |
-| **Frames usados (final)** | **8 / 8 (100%)** | Memória física completamente ocupada (alocações não liberadas pela parada abrupta) |
-| **Page faults (final)** | **59.301.121** | Contador global de page faults |
+| **TLB Hits** | 2.468.951 | Traduções resolvidas na TLB |
+| **TLB Misses** | 666.302 | Traduções que precisaram consultar a PageTable |
+| **TLB Evicções** | **2.233.924** | LRU removendo entradas para abrir espaço — com 8 entradas e dezenas de vAddrs, a TLB vive cheia |
+| **Frames usados (final)** | **7 / 8 (87,5%)** | Memória física quase completamente ocupada |
+| **Page faults (final)** | **50.802.738** | Contador global de page faults |
 | **Tabelas de página** | 2 ativas | Uma por thread |
 
 #### Taxa de Acerto da TLB
 
 ```
-TLB Hit Rate = 2.617.629 / (2.617.629 + 920.617) ≈ 73,98%
+TLB Hit Rate = 2.468.951 / (2.468.951 + 666.302) ≈ 78,75%
 ```
 
-Com apenas **8 entradas** na TLB e 128 páginas virtuais disputadas por 2 threads, a taxa de acerto cai para ~74%. Compare com o teste anterior (TLB de 20 entradas, 99,9%): a redução no tamanho da TLB causa uma queda drástica na eficiência — 920 mil misses versus apenas 9 mil.
+Com apenas **8 entradas** na TLB e 128 páginas virtuais disputadas por 2 threads, a taxa de acerto cai para ~79%. A redução no tamanho da TLB causa uma queda drástica na eficiência — 666K misses contra apenas 9 mil (teste com 20 entradas).
 
 #### Page Faults e Exaustão
 
-A cada rodada, cada thread tenta alocar 128 páginas. Como só existem **8 frames físicos**, no máximo 8 alocações por rodada (entre ambas as threads) conseguem frames. As demais ~120 tentativas por thread resultam em **page faults**. Em 10 segundos, as threads somam **59 milhões de page faults**.
+A cada rodada, cada thread tenta alocar 128 páginas. Como só existem **8 frames físicos**, no máximo 8 alocações por rodada (entre ambas as threads) conseguem frames. As demais ~120 tentativas por thread resultam em **page faults**. Em 10 segundos, as threads somam **50 milhões de page faults**.
 
 Os 8/8 frames ocupados ao final são esperados: quando `stop` é disparado, as threads podem estar no meio de uma rodada de alocação, e as alocações bem-sucedidas daquela rodada não são liberadas.
 
 #### Integridade
 
-**PASS — 0 erros de dados.** Mesmo com 59M page faults, 2.7M evicções de TLB, e 920K misses, **toda leitura retornou o dado correto**. O teste comprova que:
+**PASS — 0 erros de dados.** Mesmo com 50M page faults, 2.2M evicções de TLB, e 666K misses, **toda leitura retornou o dado correto**. O teste comprova que:
 - O isolamento de PageTable por thread funciona mesmo sob contenção extrema
-- A TLB compartilhada, embora cause aliasing (visto no teste anterior), não corrompe dados quando cada thread usa seu próprio range de vAddrs
+- A TLB com chaveamento por `(thread_id, pageNumber)` mantem o isolamento entre threads
 - O free dinâmico (consulta `getAllocSize` na MainMemory) e a reutilização de frames operam corretamente
 
 ---
@@ -396,6 +405,6 @@ Os 8/8 frames ocupados ao final são esperados: quando `stop` é disparado, as t
 | TLB | LRU, exist/get, evicção individual | OK |
 | TLB Full | Evicções em cadeia, refresh, legibilidade pós-evicção | OK |
 | MMU | Ciclo completo alloc/write/read/free, cross-page, free dinâmico | OK |
-| MMU Multi-thread | Isolamento de PageTable por thread + aliasing de TLB | OK (aliasing demonstrado) |
+| MMU Multi-thread | Isolamento de PageTable + TLB por thread | OK |
 | String | Alocação MMU via `(size_t)this`, append, print | OK |
-| **Estresse 10s — Exaustão** | **1,77M allocs, 59M page faults, 73,98% hit rate, zero corrupção** | **PASS** |
+| **Estresse 10s — Exaustão** | **1,56M allocs, 50M page faults, 73% hit rate, zero corrupção** | **OK** |

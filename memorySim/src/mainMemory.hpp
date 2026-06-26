@@ -24,6 +24,7 @@ public:
 	size_t getQntFrames() const { return QNT_FRAMES; }
 	size_t getAllocSize(size_t pAddr) const { std::lock_guard<std::mutex> lock(mtx); return allocSize[pAddr][0]; }
 	size_t getPageFaults() const { std::lock_guard<std::mutex> lock(mtx); return pageFaults; }
+	void addPageFault() const { std::lock_guard<std::mutex> lock(mtx); pageFaults++; }
 	void clearPageFaults() { std::lock_guard<std::mutex> lock(mtx); pageFaults = 0; }
 
 };

@@ -61,26 +61,27 @@ void testingTLB() {
 	printf("\n=== Testing TLB ===\n");
 
 	TLB<4> tlb;
+	std::thread::id tid = std::this_thread::get_id();
 	printf("-- Empty TLB --\n");
 	tlb.printSummary();
 
 	printf("\n-- Filling TLB (4 entries) --\n");
-	tlb.addPageEntry(PageEntry(0x1000, 0xA000));
-	tlb.addPageEntry(PageEntry(0x2000, 0xB000));
-	tlb.addPageEntry(PageEntry(0x3000, 0xC000));
-	tlb.addPageEntry(PageEntry(0x4000, 0xD000));
+	tlb.addPageEntry(tid, PageEntry(0x1000, 0xA000));
+	tlb.addPageEntry(tid, PageEntry(0x2000, 0xB000));
+	tlb.addPageEntry(tid, PageEntry(0x3000, 0xC000));
+	tlb.addPageEntry(tid, PageEntry(0x4000, 0xD000));
 	tlb.printSummary();
 	printf("  isFull: %d (expected 1)\n", tlb.isFull());
 
 	printf("\n-- exist/get --\n");
-	printf("  exist(%zu): %d (expected 1)\n", (size_t)0x1000, tlb.exist(0x1000));
-	printf("  exist(%zu): %d (expected 0)\n", (size_t)0x9999, tlb.exist(0x9999));
+	printf("  exist(%zu): %d (expected 1)\n", (size_t)0x1000, tlb.exist(tid, 0x1000));
+	printf("  exist(%zu): %d (expected 0)\n", (size_t)0x9999, tlb.exist(tid, 0x9999));
 
-	PageEntry e = tlb.get(0x2000);
+	PageEntry e = tlb.get(tid, 0x2000);
 	printf("  get(%zu): vAddr=%zu pAddr=%zu (expected %zu %zu)\n",
 		(size_t)0x2000, e.getVAddr(), e.getPAddr(), (size_t)0x2000, (size_t)0xB000);
 
-	PageEntry miss = tlb.get(0x9999);
+	PageEntry miss = tlb.get(tid, 0x9999);
 	printf("  get(%zu) on miss: vAddr=%zu pAddr=%zu (expected -1 -1)\n",
 		(size_t)0x9999, miss.getVAddr(), miss.getPAddr());
 
@@ -88,54 +89,55 @@ void testingTLB() {
 	printf("  Order by timer: %zu(t1), %zu(t2->t5 on get), %zu(t3), %zu(t4)\n",
 		(size_t)0x1000, (size_t)0x2000, (size_t)0x3000, (size_t)0x4000);
 	printf("  Oldest untouched is %zu (timer=1)\n", (size_t)0x1000);
-	tlb.addPageEntry(PageEntry(0x5000, 0xE000));
+	tlb.addPageEntry(tid, PageEntry(0x5000, 0xE000));
 	tlb.printSummary();
-  printf("  exist(%zu): %d (expected 0 - evicted)\n", (size_t)0x1000, tlb.exist(0x1000));
-  printf("  exist(%zu): %d (expected 1 - newly added)\n", (size_t)0x5000, tlb.exist(0x5000));
+  printf("  exist(%zu): %d (expected 0 - evicted)\n", (size_t)0x1000, tlb.exist(tid, 0x1000));
+  printf("  exist(%zu): %d (expected 1 - newly added)\n", (size_t)0x5000, tlb.exist(tid, 0x5000));
 }
 
 void testingTLBFull() {
 	printf("\n=== Testing TLB Full Behavior ===\n");
 
 	TLB<3> tlb;
+	std::thread::id tid = std::this_thread::get_id();
 	size_t e1 = 0x100, e2 = 0x200, e3 = 0x300;
 	size_t e4 = 0x400, e5 = 0x500, e6 = 0x600;
 
 	printf("-- Fill TLB(3) to capacity --\n");
-	tlb.addPageEntry(PageEntry(e1, 1));
-	tlb.addPageEntry(PageEntry(e2, 2));
-	tlb.addPageEntry(PageEntry(e3, 3));
+	tlb.addPageEntry(tid, PageEntry(e1, 1));
+	tlb.addPageEntry(tid, PageEntry(e2, 2));
+	tlb.addPageEntry(tid, PageEntry(e3, 3));
 	printf("  isFull: %d (expected 1)\n", tlb.isFull());
 	printf("  exist(%zu): %d exist(%zu): %d exist(%zu): %d\n",
-		e1, tlb.exist(e1), e2, tlb.exist(e2), e3, tlb.exist(e3));
+		e1, tlb.exist(tid, e1), e2, tlb.exist(tid, e2), e3, tlb.exist(tid, e3));
 
 	printf("\n-- Evict oldest (e1) by adding e4 --\n");
-	tlb.addPageEntry(PageEntry(e4, 4));
-	printf("  exist(%zu): %d (expected 0 - evicted)\n", e1, tlb.exist(e1));
-	printf("  exist(%zu): %d (expected 1 - new)\n", e4, tlb.exist(e4));
+	tlb.addPageEntry(tid, PageEntry(e4, 4));
+	printf("  exist(%zu): %d (expected 0 - evicted)\n", e1, tlb.exist(tid, e1));
+	printf("  exist(%zu): %d (expected 1 - new)\n", e4, tlb.exist(tid, e4));
 	printf("  exist(%zu): %d exist(%zu): %d (expected 1 1)\n",
-		e2, tlb.exist(e2), e3, tlb.exist(e3));
+		e2, tlb.exist(tid, e2), e3, tlb.exist(tid, e3));
 
 	printf("\n-- Refresh e2, then evict oldest (e3) --\n");
-	tlb.get(e2);
-	tlb.addPageEntry(PageEntry(e5, 5));
-	printf("  exist(%zu): %d (expected 0 - oldest untouched)\n", e3, tlb.exist(e3));
-	printf("  exist(%zu): %d (expected 1 - refreshed)\n", e2, tlb.exist(e2));
-	printf("  exist(%zu): %d (expected 1 - new)\n", e5, tlb.exist(e5));
+	tlb.get(tid, e2);
+	tlb.addPageEntry(tid, PageEntry(e5, 5));
+	printf("  exist(%zu): %d (expected 0 - oldest untouched)\n", e3, tlb.exist(tid, e3));
+	printf("  exist(%zu): %d (expected 1 - refreshed)\n", e2, tlb.exist(tid, e2));
+	printf("  exist(%zu): %d (expected 1 - new)\n", e5, tlb.exist(tid, e5));
 
 	printf("\n-- Multiple successive evictions --\n");
-	tlb.addPageEntry(PageEntry(e6, 6));
-	printf("  after e6 added, exist(e4): %d (expected 0 - evicted)\n", tlb.exist(e4));
-	printf("  exist(e6): %d (expected 1)\n", tlb.exist(e6));
+	tlb.addPageEntry(tid, PageEntry(e6, 6));
+	printf("  after e6 added, exist(e4): %d (expected 0 - evicted)\n", tlb.exist(tid, e4));
+	printf("  exist(e6): %d (expected 1)\n", tlb.exist(tid, e6));
 	printf("  exist(e2): %d exist(e5): %d (expected 1 1)\n",
-		tlb.exist(e2), tlb.exist(e5));
+		tlb.exist(tid, e2), tlb.exist(tid, e5));
 
 	printf("\n-- Verify entries still readable after eviction chain --\n");
-	PageEntry g2 = tlb.get(e2);
+	PageEntry g2 = tlb.get(tid, e2);
 	printf("  get(e2): pAddr=%zu (expected 2)\n", g2.getPAddr());
-	PageEntry g5 = tlb.get(e5);
+	PageEntry g5 = tlb.get(tid, e5);
 	printf("  get(e5): pAddr=%zu (expected 5)\n", g5.getPAddr());
-	PageEntry g6 = tlb.get(e6);
+	PageEntry g6 = tlb.get(tid, e6);
 	printf("  get(e6): pAddr=%zu (expected 6)\n", g6.getPAddr());
 
 	tlb.printSummary();
@@ -180,9 +182,9 @@ void testingMMU() {
 	printf("  read after realloc: %s (expected VWXYZ)\n", reread);
 
 	printf("\n-- Page fault counter --\n");
-	printf("  page faults: %zu (expected 0)\n", mmu.getPageFaults());
+	printf("  page faults: %zu (expected 1 - one from unmapped read at 0x2000)\n", mmu.getPageFaults());
 	mmu.read(buf, 0x6000, 1);
-	printf("  after unmapped read: %zu (expected 0 - no alloc attempt, no fault)\n", mmu.getPageFaults());
+	printf("  after unmapped read: %zu (expected 2 - one more from unmapped read at 0x6000)\n", mmu.getPageFaults());
 
 	printf("\n-- printSummary --\n");
 	mmu.printSummary();

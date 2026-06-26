@@ -52,21 +52,22 @@ std::pair<size_t, size_t> MMU<TOTAL_MEM, FRAME_SIZE, TOTAL_VMEM, TLB_ENTRIES>::t
 	std::pair<size_t, size_t> pageAndOff) {
 	size_t pageNumber = pageAndOff.first;
 	size_t offset = pageAndOff.second;
+	std::thread::id this_id = std::this_thread::get_id();
 
-	if (tlb.exist(pageNumber)) {
-		PageEntry entry = tlb.get(pageNumber);
+	if (tlb.exist(this_id, pageNumber)) {
+		PageEntry entry = tlb.get(this_id, pageNumber);
 		return {entry.getPAddr(), offset};
 	}
 
-	std::thread::id this_id = std::this_thread::get_id();
 	PageTable<TOTAL_VMEM, FRAME_SIZE> &pt = pageTables[this_id];
 	PageEntry entry = pt.getEntry(pageNumber * FRAME_SIZE);
 
 	if (entry.getVAddr() == (size_t)-1) {
+		memory->addPageFault();
 		return {(size_t)-1, 0};
 	}
 
-	tlb.addPageEntry(PageEntry(pageNumber, entry.getPAddr()));
+	tlb.addPageEntry(this_id, PageEntry(pageNumber, entry.getPAddr()));
 	return {entry.getPAddr(), offset};
 }
 
@@ -87,7 +88,7 @@ int MMU<TOTAL_MEM, FRAME_SIZE, TOTAL_VMEM, TLB_ENTRIES>::allocate(size_t vAddr, 
 		const auto pageVAddr = baseVAddr + i * FRAME_SIZE;
 		const auto pagePAddr = pAddr + i;
 		pt.createNew(pageVAddr, pagePAddr);
-		tlb.addPageEntry(PageEntry(pageVAddr / FRAME_SIZE, pagePAddr));
+		tlb.addPageEntry(this_id, PageEntry(pageVAddr / FRAME_SIZE, pagePAddr));
 	}
 
 	return 0;
@@ -155,7 +156,7 @@ int MMU<TOTAL_MEM, FRAME_SIZE, TOTAL_VMEM, TLB_ENTRIES>::free(size_t vAddr) {
 	for (size_t i = 0; i < numPages; i++) {
 		size_t pageVAddr = baseVAddr + i * FRAME_SIZE;
 		pt.removeEntry(pageVAddr);
-		tlb.remove(pageVAddr / FRAME_SIZE);
+		tlb.remove(this_id, pageVAddr / FRAME_SIZE);
 	}
 
 	return 0;
