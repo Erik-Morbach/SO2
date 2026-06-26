@@ -6,10 +6,11 @@
 #include "pageEntry.hpp"
 #include "fastSegTree.hpp"
 
+template<size_t ENTRIES>
 class TLB {
 private:
 	uint64_t timer;
-	FastSegTree<uint64_t> segTree;
+	FastSegTree<ENTRIES> segTree;
 
 	std::vector<PageEntry> entries;
 
